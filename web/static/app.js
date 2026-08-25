@@ -1,5 +1,8 @@
 document.addEventListener('alpine:init', () => {
   Alpine.data('adleadApp', () => ({
+    // Tema (Color Mode: 'light' | 'dark' | 'system')
+    themeMode: localStorage.getItem('themeMode') || 'system',
+
     // Estado de Busca
     searchTerms: '',
     limit: 25,
@@ -39,6 +42,7 @@ document.addEventListener('alpine:init', () => {
     },
 
     async init() {
+      this.initTheme();
       await this.loadStats();
       await this.loadLeads();
       
@@ -48,6 +52,35 @@ document.addEventListener('alpine:init', () => {
           this.loadStats();
         }
       }, 30000);
+    },
+
+    initTheme() {
+      this.applyTheme();
+      
+      // Ouvinte para mudanças do sistema operacional
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+        if (this.themeMode === 'system') {
+          this.applyTheme();
+        }
+      });
+    },
+
+    setTheme(mode) {
+      this.themeMode = mode;
+      localStorage.setItem('themeMode', mode);
+      this.applyTheme();
+      this.showToast(`Modo de cor alterado para: ${mode === 'system' ? 'Sistema' : mode === 'dark' ? 'Escuro' : 'Claro'}`, 'info');
+    },
+
+    applyTheme() {
+      const isDark = this.themeMode === 'dark' || 
+        (this.themeMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      
+      if (isDark) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
     },
 
     async loadStats() {
@@ -102,7 +135,6 @@ document.addEventListener('alpine:init', () => {
       this.loading = true;
       this.loadingStep = 'Consultando Meta Ad Library API...';
 
-      // Simulação visual de etapas de progresso
       const stepTimer1 = setTimeout(() => {
         if (this.loading) this.loadingStep = 'Raspando Landing Pages concorrentemente (WhatsApp, E-mails)...';
       }, 3000);
@@ -173,7 +205,6 @@ document.addEventListener('alpine:init', () => {
           throw new Error('Falha ao atualizar status');
         }
 
-        // Atualização otimista local
         const index = this.leads.findIndex(l => l.id === id);
         if (index !== -1) {
           this.leads[index].status = newStatus;
@@ -240,7 +271,6 @@ document.addEventListener('alpine:init', () => {
       const body = encodeURIComponent(icebreaker || `Olá equipe da ${companyName},\n\n`);
       const mailtoURL = `mailto:${email}?subject=${subject}&body=${body}`;
       
-      // Abre o cliente de e-mail padrão
       window.location.href = mailtoURL;
       this.showToast(`Abrindo cliente de e-mail para ${email}...`, 'info');
     },

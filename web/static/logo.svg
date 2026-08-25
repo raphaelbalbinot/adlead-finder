@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Glow filter for intense neon effect -->
+    <filter id="neon-glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="8" result="blur1" />
+      <feGaussianBlur stdDeviation="18" result="blur2" />
+      <feGaussianBlur stdDeviation="30" result="blur3" />
+      <feMerge>
+        <feMergeNode in="blur3" />
+        <feMergeNode in="blur2" />
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    <linearGradient id="neon-grad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00f5a0" />
+      <stop offset="100%" stop-color="#00d9f5" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background rounded rectangle -->
+  <rect width="512" height="512" rx="100" fill="#090d16" />
+
+  <!-- Bold White Letter N -->
+  <path d="M 145 130 L 225 130 L 287 252 L 287 130 L 367 130 L 367 382 L 287 382 L 225 260 L 225 382 L 145 382 Z" fill="#FFFFFF" />
+
+  <!-- Neon Glowing Ascending Path Line -->
+  <g filter="url(#neon-glow)">
+    <path d="M 125 365 C 185 365, 175 255, 256 255 C 337 255, 365 170, 395 125" 
+          fill="none" 
+          stroke="#00ffaa" 
+          stroke-width="28" 
+          stroke-linecap="round" />
+          
+    <!-- Node 1 (Bottom-left start circle) -->
+    <circle cx="125" cy="365" r="28" fill="#090d16" stroke="#00ffaa" stroke-width="18" />
+    
+    <!-- Node 2 (Top-right end circle) -->
+    <circle cx="395" cy="125" r="28" fill="#090d16" stroke="#00ffaa" stroke-width="18" />
+  </g>
+</svg>

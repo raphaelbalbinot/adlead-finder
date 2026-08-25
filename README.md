@@ -1,4 +1,11 @@
-# AdLead Finder (Golang Edition) 🚀
+<div align="center">
+
+<img src="web/static/logo.png" alt="Nexus AdLead Finder Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 0 25px rgba(0, 255, 170, 0.35);" />
+
+# Nexus AdLead Finder 🚀
+**Prospecção B2B, Scraping Concorrente & Qualificação Inteligente com IA**
+
+*Parte do ecossistema de soluções de inteligência comercial **Nexus** (ao lado do NexusVBO).*
 
 [![Go Version](https://img.shields.io/badge/Go-1.22%2B-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![SQLite](https://img.shields.io/badge/Database-SQLite%20(Pure%20Go)-003B57?style=flat&logo=sqlite)](https://modernc.org/sqlite)
@@ -6,55 +13,64 @@
 [![Meta Graph API](https://img.shields.io/badge/Meta%20Ads-Graph%20API%20v21.0-0668E1?style=flat&logo=meta)](https://developers.facebook.com/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Ferramenta local de alta performance em **Go (Golang)** para prospecção, raspagem concorrente de contatos e qualificação inteligente de leads B2B extraídos da **Meta Ad Library API**, enriquecidos com scraping de Landing Pages e avaliados pelo modelo **Google Gemini (Google AI Studio)**.
+</div>
 
-O frontend Single Page Application (Tailwind CSS + Alpine.js) é 100% embutido diretamente no binário compilado (`//go:embed`), permitindo que a aplicação rode como um único arquivo `.exe` sem dependências externas.
+---
+
+## 📖 Visão Geral
+
+O **Nexus AdLead Finder** é uma aplicação desktop/local de alta performance desenvolvida em **Go (Golang)** voltada para agências, consultorias e times comerciais B2B. Ele extrai anunciantes ativos diretamente da **Meta Ad Library API**, realiza a raspagem concorrente de Landing Pages para identificar canais de contato e qualifica a maturidade comercial de cada empresa utilizando o **Google Gemini AI (Google AI Studio)**.
+
+Todo o frontend SPA moderno (Tailwind CSS + Alpine.js) é embutido diretamente no binário final compilado (`//go:embed`), permitindo que toda a solução seja distribuída e executada como um único arquivo `.exe` autônomo, sem dependências externas de Node.js, CGO ou bancos de dados pesados.
 
 ---
 
 ## 📸 Funcionalidades Principais
 
-* 🔍 **Mineração na Meta Ad Library:** Busca anúncios ativos por nicho/palavra-chave, com filtros por data mínima de veiculação (`ad_delivery_date_min`) e plataformas de veiculação (`publisher_platforms`: Facebook, Instagram, Messenger, Audience Network).
-* ⚡ **Scraping Concorrente com Worker Pool:** Pool de 10 goroutines simultâneas com timeout individual (8s) para raspar Landing Pages dos anunciantes sem travar o fluxo, extraindo:
-  * **WhatsApp:** Links diretos (`wa.me/`, `api.whatsapp.com`) e padrões de telefones brasileiros.
-  * **E-mails:** Tags `mailto:` e varredura textual no DOM (com filtros de falsos positivos).
+* 🔍 **Mineração na Meta Ad Library:** Busca em tempo real por nicho ou palavra-chave com filtros avançados:
+  * **Data Mínima de Veiculação (`ad_delivery_date_min`):** Filtra apenas empresas anunciando a partir de uma data específica.
+  * **Plataformas de Anúncio (`publisher_platforms`):** Filtro seletivo por Facebook, Instagram, Messenger ou Audience Network.
+* ⚡ **Scraping Concorrente com Worker Pool:** Pool de 10 goroutines simultâneas com timeout individual (8s) para extração automática de:
+  * **WhatsApp:** Links `wa.me/`, APIs e padrões de telefones brasileiros normalizados.
+  * **E-mails:** Tags `mailto:` e varredura textual no DOM com limpeza de falsos positivos.
   * **Instagram:** Perfis sociais vinculados.
-* 🧠 **Qualificação com Google Gemini AI:** Análise contextual dos criativos e maturidade comercial via saída estruturada JSON:
-  * **Quality Score:** Nota de 1 a 10.
+* 🧠 **Qualificação Avançada com Gemini AI:** Diagnóstico estruturado em JSON com:
+  * **Score de Qualidade (1 a 10):** Avaliação de investimento e maturidade digital.
   * **Classificação:** *Alto Potencial*, *Médio* ou *Descartável*.
-  * **Diagnóstico & Justificativa:** Explicação detalhada dos motivos da pontuação.
-  * **Copy de Abordagem Personalizada (Icebreaker):** Mensagem de primeiro contato consultiva e customizada.
-* 💾 **Persistência SQLite 100% Pura em Go:** Utiliza o driver `modernc.org/sqlite` que dispensa compilador CGO/GCC no Windows e persiste os dados fisicamente em `./leads.db`.
-* 🎯 **Ações de 1-Clique no Dashboard:**
-  * 🟢 **WhatsApp 1-Clique:** Abre a conversa diretamente com a copy pré-preenchida no `wa.me`.
-  * ✉️ **E-mail 1-Clique:** Abre o cliente de e-mail padrão (`mailto:`) com assunto e corpo configurados.
-  * 📋 **Copiar Copy:** Copia a mensagem de abordagem da IA para a área de transferência.
-  * 🔄 **Gestão de Pipeline:** Alternância ágil de status (*Novo*, *Contatado*, *Descartado*).
-  * 📊 **Exportação CSV:** Download de toda a base em 1 clique com suporte a acentos no Excel.
+  * **Diagnóstico & Justificativa:** Explicação transparente do porquê da classificação atribuída.
+  * **Copy de Abordagem Personalizada (Icebreaker):** Mensagem de primeiro contato consultiva citando temas do anúncio.
+* 🌓 **Alternador de Color-Mode (Claro / Escuro / Sistema):** Interface responsiva e adaptável com persistência da preferência e sincronização automática com o sistema operacional.
+* 💾 **Persistência SQLite 100% Pura em Go:** Utiliza o driver `modernc.org/sqlite` sem necessidade de CGO/MinGW no Windows, salvando a base local em `./leads.db`.
+* 🎯 **Ações Rápidas de 1-Clique:**
+  * 🟢 **WhatsApp 1-Clique:** Abre conversa direta com a mensagem de abordagem da IA pré-preenchida.
+  * ✉️ **E-mail 1-Clique:** Dispara o cliente de e-mail padrão (`mailto:`) com assunto e corpo configurados.
+  * 📋 **Copiar Copy:** Cópia imediata da mensagem para a área de transferência.
+  * 🔄 **Gestão de Status:** Alterne entre *Novo*, *Contatado* e *Descartado*.
+  * 📊 **Exportar CSV:** Download da base formatada com suporte a acentos no Excel.
 
 ---
 
 ## 🛠️ Stack Tecnológica
 
-| Camada | Tecnologia | Descrição |
+| Camada | Tecnologia | Detalhes |
 | :--- | :--- | :--- |
-| **Backend** | Go (Golang) 1.22+ | Linguagem compilada de alto desempenho e concorrência nativa |
-| **Roteador HTTP** | `github.com/go-chi/chi/v5` | Roteador REST leve, idiomático e com middlewares de timeout e CORS |
-| **Banco de Dados** | `modernc.org/sqlite` | SQLite puro em Go (sem dependência de CGO/MinGW no Windows) |
-| **Scraping & HTML** | `github.com/PuerkitoBio/goquery` | Parser HTML idiomático baseado em seletores CSS |
-| **Inteligência Artificial**| Google Gemini 1.5 Flash | Chamadas HTTP REST com retorno de JSON Schema estruturado |
-| **Frontend** | Tailwind CSS + Alpine.js | Dashboard SPA moderno com tema escuro e glassmorphism |
-| **Empacotamento** | `//go:embed` nativo | Frontend embutido diretamente dentro do binário `.exe` |
+| **Linguagem & Runtime** | Go (Golang) 1.22+ | Compilação nativa para Windows sem dependências |
+| **Roteador HTTP** | `github.com/go-chi/chi/v5` | Roteador leve, idiomático com middleware de timeout e CORS |
+| **Banco de Dados** | `modernc.org/sqlite` | Driver SQLite 100% puro em Go (sem CGO) |
+| **Scraping & DOM** | `github.com/PuerkitoBio/goquery` | Seletores CSS para extração ágil de tags e links |
+| **Inteligência Artificial**| Google Gemini 1.5 Flash | Chamadas HTTP REST com retorno de JSON estruturado |
+| **Frontend Embutido** | Tailwind CSS + Alpine.js | Dashboard SPA empacotado via `//go:embed static/*` |
+| **Família Nexus** | Padrão NexusVBO | Identidade visual alinhada às soluções de inteligência Nexus |
 
 ---
 
-## 📂 Estrutura do Projeto
+## 📂 Estrutura de Diretórios
 
 ```text
 adlead-finder/
 ├── cmd/
 │   └── server/
-│       └── main.go           # Ponto de entrada, inicialização e graceful shutdown
+│       └── main.go           # Ponto de entrada, servidor HTTP e graceful shutdown
 │
 ├── internal/
 │   ├── config/
@@ -74,9 +90,12 @@ adlead-finder/
 ├── web/
 │   ├── embed.go              # Diretiva //go:embed static/*
 │   └── static/
+│       ├── logo.png          # Logotipo oficial Nexus
+│       ├── favicon.png       # Favicon da aplicação
+│       ├── logo.svg          # Logotipo vetorial de alta definição
 │       ├── index.html        # Dashboard SPA completo
-│       ├── app.js            # Lógica reativa com Alpine.js
-│       └── style.css         # Estilos glassmorphism e tema escuro
+│       ├── app.js            # Lógica reativa com Alpine.js e Color Mode
+│       └── style.css         # Estilos glassmorphism, temas claro e escuro
 │
 ├── build.bat                 # Script de compilação Windows (.exe otimizado)
 ├── start.bat                 # Script de inicialização e abertura automática do navegador
@@ -96,7 +115,7 @@ adlead-finder/
 * Chave de API do **Google AI Studio / Gemini** ([Google AI Studio](https://aistudio.google.com/)).
 
 ### 2. Configurar Variáveis de Ambiente (`.env`)
-Copie o modelo de exemplo ou edite seu arquivo `.env`:
+Copie o modelo de exemplo ou edite o seu arquivo `.env`:
 
 ```bash
 cp .env.example .env
@@ -159,21 +178,8 @@ go build -ldflags="-s -w" -o adlead-finder.exe ./cmd/server/main.go
 | `GET` | `/api/stats` | Retorna métricas consolidadas de leads e contatos disponíveis |
 | `GET` | `/api/export/csv` | Gera e faz o download de um arquivo CSV de toda a base |
 
-### Exemplo de Payload para Busca (`POST /api/search`):
-```json
-{
-  "search_terms": "energia solar",
-  "limit": 25,
-  "ad_delivery_date_min": "2026-01-01",
-  "publisher_platforms": ["FACEBOOK", "INSTAGRAM"],
-  "only_whatsapp": false,
-  "only_email": false,
-  "min_score": 0
-}
-```
-
 ---
 
 ## 📜 Licença
 
-Este projeto é distribuído sob a licença **MIT**. Consulte o arquivo [LICENSE](LICENSE) para mais detalhes.
+Este projeto é distribuído sob a licença **MIT**.

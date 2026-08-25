@@ -19,7 +19,7 @@ import (
 
 func main() {
 	fmt.Println("======================================================")
-	fmt.Println("       🚀 ADLEAD FINDER (GOLANG EDITION)              ")
+	fmt.Println("    🚀 NEXUS ADLEAD FINDER (GOLANG EDITION)          ")
 	fmt.Println("======================================================")
 
 	// 1. Carregar Configurações

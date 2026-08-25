@@ -1,6 +1,6 @@
 @echo off
 echo ======================================================
-echo    COMPILANDO ADLEAD FINDER (GOLANG)
+echo    COMPILANDO NEXUS ADLEAD FINDER (GOLANG)
 echo ======================================================
 go mod tidy
 go build -ldflags="-s -w" -o adlead-finder.exe ./cmd/server/main.go
