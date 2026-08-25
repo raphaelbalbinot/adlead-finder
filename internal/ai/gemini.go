@@ -135,63 +135,70 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido com a seguinte estrutura:
 		return c.fallbackQualification(data, "Erro interno ao serializar payload Gemini")
 	}
 
-	endpoint := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=%s", c.apiKey)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return c.fallbackQualification(data, "Erro ao criar requisição Gemini")
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	modelsToTry := []string{"gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-latest"}
+	var lastErr string
 
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return c.fallbackQualification(data, fmt.Sprintf("Erro de conexão Gemini: %v", err))
-	}
-	defer resp.Body.Close()
+	for _, modelName := range modelsToTry {
+		endpoint := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", modelName, c.apiKey)
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+		if err != nil {
+			continue
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
 
-	respBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return c.fallbackQualification(data, "Erro ao ler resposta do Gemini")
-	}
+		resp, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			lastErr = fmt.Sprintf("Erro de conexão com %s: %v", modelName, err)
+			continue
+		}
 
-	var gResp geminiResponse
-	if err := json.Unmarshal(respBytes, &gResp); err != nil {
-		return c.fallbackQualification(data, "Erro ao decodificar resposta do Gemini")
-	}
+		respBytes, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Sprintf("Erro ao ler resposta de %s: %v", modelName, err)
+			continue
+		}
 
-	if gResp.Error != nil {
-		return c.fallbackQualification(data, fmt.Sprintf("Erro da API Gemini: %s", gResp.Error.Message))
-	}
+		var gResp geminiResponse
+		if err := json.Unmarshal(respBytes, &gResp); err != nil {
+			lastErr = fmt.Sprintf("Erro ao decodificar JSON de %s", modelName)
+			continue
+		}
 
-	if len(gResp.Candidates) == 0 || len(gResp.Candidates[0].Content.Parts) == 0 {
-		return c.fallbackQualification(data, "Resposta vazia do Gemini")
-	}
+		if gResp.Error != nil {
+			lastErr = fmt.Sprintf("%s: %s", modelName, gResp.Error.Message)
+			continue
+		}
 
-	jsonText := gResp.Candidates[0].Content.Parts[0].Text
-	jsonText = cleanMarkdownJSON(jsonText)
+		if len(gResp.Candidates) > 0 && len(gResp.Candidates[0].Content.Parts) > 0 {
+			jsonText := gResp.Candidates[0].Content.Parts[0].Text
+			jsonText = cleanMarkdownJSON(jsonText)
 
-	var result QualificationResult
-	if err := json.Unmarshal([]byte(jsonText), &result); err != nil {
-		return c.fallbackQualification(data, "Erro ao interpretar JSON retornado pela IA")
-	}
+			var result QualificationResult
+			if err := json.Unmarshal([]byte(jsonText), &result); err == nil {
+				// Normalizações de segurança
+				if result.QualityScore < 1 {
+					result.QualityScore = 1
+				} else if result.QualityScore > 10 {
+					result.QualityScore = 10
+				}
 
-	// Normalizações de segurança
-	if result.QualityScore < 1 {
-		result.QualityScore = 1
-	} else if result.QualityScore > 10 {
-		result.QualityScore = 10
-	}
+				if result.Classification == "" {
+					if result.QualityScore >= 8 {
+						result.Classification = "Alto Potencial"
+					} else if result.QualityScore >= 5 {
+						result.Classification = "Médio"
+					} else {
+						result.Classification = "Descartável"
+					}
+				}
 
-	if result.Classification == "" {
-		if result.QualityScore >= 8 {
-			result.Classification = "Alto Potencial"
-		} else if result.QualityScore >= 5 {
-			result.Classification = "Médio"
-		} else {
-			result.Classification = "Descartável"
+				return result
+			}
 		}
 	}
 
-	return result
+	return c.fallbackQualification(data, lastErr)
 }
 
 func (c *Client) fallbackQualification(data LeadInputData, reason string) QualificationResult {
