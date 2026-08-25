@@ -1,0 +1,22 @@
+{
+  "[go]": {
+    "editor.insertSpaces": false,
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+  "go.useLanguageServer": true,
+  "go.lintOnSave": "package",
+  "go.lintTool": "golangci-lint",
+  "go.formatTool": "default",
+  "gopls": {
+    "ui.semanticTokens": true,
+    "formatting.gofumpt": true,
+    "analyses": {
+      "unusedparams": true,
+      "shadow": true
+    }
+  },
+  "files.eol": "\n"
+}
