@@ -25,31 +25,14 @@ import (
 type Server struct {
 	db         *db.Database
 	metaClient *meta.Client
-	scraper    *scraperInterface
 	aiClient   *ai.Client
 	router     *chi.Mux
-}
-
-type scraperInterface interface {
-	ScrapeBatch(urls []string) []scraperResult
 }
 
 type scraperResult struct {
 	WhatsApp  string
 	Email     string
 	Instagram string
-}
-
-type scraperAdapter struct {
-	realScraper scraperReal
-}
-
-type scraperReal interface {
-	ScrapeBatch(urls []string) []struct {
-		WhatsApp  string `json:"whatsapp"`
-		Email     string `json:"email"`
-		Instagram string `json:"instagram"`
-	}
 }
 
 // SearchRequest representa os parâmetros enviados pelo frontend para iniciar uma busca
