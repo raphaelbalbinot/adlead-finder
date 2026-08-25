@@ -2,7 +2,6 @@
   "recommendations": [
     "golang.go",
     "usernamehw.errorlens",
-    "golangci.golangci-lint",
     "eamodio.gitlens",
     "ms-azuretools.vscode-docker",
     "humao.rest-client",
