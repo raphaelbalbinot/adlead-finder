@@ -28,3 +28,9 @@ coverage.html
 
 # Go workspace file
 go.work
+
+# Database files
+*.db
+*.db-journal
+*.db-wal
+
