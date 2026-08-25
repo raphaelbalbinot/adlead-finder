@@ -29,6 +29,7 @@ type QualificationResult struct {
 	ClassificationReason string `json:"classification_reason"` // Explicação detalhada do porquê da classificação
 	AnalysisReason       string `json:"analysis_reason"`       // Análise contextual completa
 	IcebreakerParagraph  string `json:"icebreaker_paragraph"`  // Copy de abordagem comercial 1-clique
+	BusinessSegment      string `json:"business_segment"`      // Área/nicho específico de atuação da empresa
 }
 
 // Client gerencia a comunicação com o Google AI Studio
@@ -42,7 +43,7 @@ func NewClient(apiKey string) *Client {
 	return &Client{
 		apiKey: apiKey,
 		httpClient: &http.Client{
-			Timeout: 20 * time.Second,
+			Timeout: 6 * time.Second,
 		},
 	}
 }
@@ -79,7 +80,7 @@ type geminiResponse struct {
 	} `json:"error,omitempty"`
 }
 
-// QualifyLead analisa o lead utilizando o modelo Gemini 1.5 Flash
+// QualifyLead analisa o lead utilizando o modelo Gemini 3.7 Flash
 func (c *Client) QualifyLead(ctx context.Context, data LeadInputData) QualificationResult {
 	if c.apiKey == "" {
 		return c.fallbackQualification(data, "Chave GEMINI_API_KEY não configurada no .env")
@@ -103,6 +104,7 @@ INSTRUÇÕES OBRIGATÓRIAS:
 3. Escreva 'classification_reason' explicando claramente por que esta classificação foi dada com base nos dados.
 4. Escreva 'analysis_reason' sintetizando a maturidade do anunciante.
 5. Crie um 'icebreaker_paragraph' altamente persuasivo e personalizado em português do Brasil, mencionando o tema do anúncio deles e iniciando uma conversa consultiva sem ser agressivo.
+6. Identifique em 'business_segment' a área/nicho de atuação específica e precisa da empresa anunciante (ex: "Clínica Odontológica e Implantes", "Energia Solar Fotovoltaica B2B", "Advocacia Trabalhista e Previdenciária", "Consultoria Financeira", etc.).
 
 Retorne EXCLUSIVAMENTE um objeto JSON válido com a seguinte estrutura:
 {
@@ -110,7 +112,8 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido com a seguinte estrutura:
   "classification": "Alto Potencial",
   "classification_reason": "Empresa veicula múltiplos anúncios com direcionamento para WhatsApp validado, demonstrando investimento contínuo e processo comercial estruturado.",
   "analysis_reason": "Empresa roda criativos ativos com tráfego direcionado, demonstrando orçamento e validação comercial.",
-  "icebreaker_paragraph": "Olá equipe da [Nome], vi que vocês estão veiculando campanhas no Instagram sobre [Tema]..."
+  "icebreaker_paragraph": "Olá equipe da [Nome], vi que vocês estão veiculando campanhas no Instagram sobre [Tema]...",
+  "business_segment": "Energia Solar Fotovoltaica"
 }`,
 		data.CompanyName, data.ActiveAdsCount, data.AdCreativeSample, data.LandingPageURL,
 		data.ExtractedWhatsApp, data.ExtractedEmail, data.ExtractedInstagram,
@@ -135,7 +138,7 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido com a seguinte estrutura:
 		return c.fallbackQualification(data, "Erro interno ao serializar payload Gemini")
 	}
 
-	modelsToTry := []string{"gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-latest"}
+	modelsToTry := []string{"gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.5-flash"}
 	var lastErr string
 
 	for _, modelName := range modelsToTry {
@@ -232,19 +235,14 @@ func (c *Client) fallbackQualification(data LeadInputData, reason string) Qualif
 		ClassificationReason: classReason,
 		AnalysisReason:       fmt.Sprintf("Empresa com %d anúncio(s) veiculando. Contatos: WhatsApp (%s), E-mail (%s).", data.ActiveAdsCount, data.ExtractedWhatsApp, data.ExtractedEmail),
 		IcebreakerParagraph:  icebreaker,
+		BusinessSegment:      "Tráfego Pago & Serviços",
 	}
 }
 
 func cleanMarkdownJSON(text string) string {
 	text = strings.TrimSpace(text)
-	if strings.HasPrefix(text, "```json") {
-		text = strings.TrimPrefix(text, "```json")
-	}
-	if strings.HasPrefix(text, "```") {
-		text = strings.TrimPrefix(text, "```")
-	}
-	if strings.HasSuffix(text, "```") {
-		text = strings.TrimSuffix(text, "```")
-	}
+	text = strings.TrimPrefix(text, "```json")
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimSuffix(text, "```")
 	return strings.TrimSpace(text)
 }

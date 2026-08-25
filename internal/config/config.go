@@ -28,9 +28,20 @@ func LoadConfig() *Config {
 	return cfg
 }
 
+// CleanToken sanitiza tokens de API removendo espaços, quebras de linha, aspas e prefixos comuns
+func CleanToken(val string) string {
+	val = strings.TrimSpace(val)
+	val = strings.Trim(val, `"'`+"`")
+	val = strings.TrimSpace(val)
+	if strings.HasPrefix(strings.ToLower(val), "bearer ") {
+		val = strings.TrimSpace(val[7:])
+	}
+	return val
+}
+
 func getEnv(key, defaultVal string) string {
 	if val, ok := os.LookupEnv(key); ok && strings.TrimSpace(val) != "" {
-		return strings.Trim(strings.TrimSpace(val), `"'`)
+		return CleanToken(val)
 	}
 	return defaultVal
 }
@@ -52,11 +63,8 @@ func loadDotEnv(filepath string) {
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) == 2 {
 			key := strings.TrimSpace(parts[0])
-			val := strings.TrimSpace(parts[1])
-			val = strings.Trim(val, `"'`)
-			if os.Getenv(key) == "" {
-				_ = os.Setenv(key, val)
-			}
+			val := CleanToken(parts[1])
+			_ = os.Setenv(key, val)
 		}
 	}
 }

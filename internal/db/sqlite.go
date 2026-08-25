@@ -14,22 +14,26 @@ import (
 
 // Lead representa a entidade principal de um lead minerado e qualificado
 type Lead struct {
-	ID                 int64     `json:"id"`
-	PageID             string    `json:"page_id"`
-	CompanyName        string    `json:"company_name"`
-	ActiveAdsCount     int       `json:"active_ads_count"`
-	AdCreativeSample   string    `json:"ad_creative_sample"`
-	AdSnapshotURL      string    `json:"ad_snapshot_url"`
-	LandingPageURL     string    `json:"landing_page_url"`
-	ExtractedWhatsApp  string    `json:"extracted_whatsapp"`
-	ExtractedEmail     string    `json:"extracted_email"`
-	ExtractedInstagram string    `json:"extracted_instagram"`
-	AIQualityScore     int       `json:"ai_quality_score"`
-	AIClassification   string    `json:"ai_classification"`
-	AIAnalysisReason   string    `json:"ai_analysis_reason"`
-	AIIcebreaker       string    `json:"ai_icebreaker"`
-	Status             string    `json:"status"` // "Novo", "Contatado", "Descartado"
-	CreatedAt          time.Time `json:"created_at"`
+	ID                  int64     `json:"id"`
+	PageID              string    `json:"page_id"`
+	CompanyName         string    `json:"company_name"`
+	ActiveAdsCount      int       `json:"active_ads_count"`
+	AdCreativeSample    string    `json:"ad_creative_sample"`
+	AdSnapshotURL       string    `json:"ad_snapshot_url"`
+	LandingPageURL      string    `json:"landing_page_url"`
+	ExtractedWhatsApp   string    `json:"extracted_whatsapp"`
+	ExtractedEmail      string    `json:"extracted_email"`
+	ExtractedInstagram  string    `json:"extracted_instagram"`
+	AIQualityScore      int       `json:"ai_quality_score"`
+	AIClassification    string    `json:"ai_classification"`
+	AIAnalysisReason    string    `json:"ai_analysis_reason"`
+	AIIcebreaker        string    `json:"ai_icebreaker"`
+	BusinessSegment     string    `json:"business_segment"` // Área/nicho de atuação da empresa
+	AdDeliveryStartTime string    `json:"ad_delivery_start_time"`
+	AdCreationTime      string    `json:"ad_creation_time"`
+	DaysRunning         int       `json:"days_running"`
+	Status              string    `json:"status"` // "Novo", "Contatado", "Descartado"
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 // Stats armazena contadores e métricas de desempenho dos leads
@@ -94,6 +98,10 @@ func (d *Database) migrate() error {
 		ai_classification TEXT DEFAULT 'Médio',
 		ai_analysis_reason TEXT,
 		ai_icebreaker TEXT,
+		business_segment TEXT DEFAULT '',
+		ad_delivery_start_time TEXT DEFAULT '',
+		ad_creation_time TEXT DEFAULT '',
+		days_running INTEGER DEFAULT 0,
 		status TEXT DEFAULT 'Novo',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
@@ -102,8 +110,16 @@ func (d *Database) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
 	CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at);
 	`
-	_, err := d.conn.Exec(schema)
-	return err
+	if _, err := d.conn.Exec(schema); err != nil {
+		return err
+	}
+
+	// Migração retroativa de colunas se a tabela já existir de execuções anteriores
+	_, _ = d.conn.Exec("ALTER TABLE leads ADD COLUMN business_segment TEXT DEFAULT '';")
+	_, _ = d.conn.Exec("ALTER TABLE leads ADD COLUMN ad_delivery_start_time TEXT DEFAULT '';")
+	_, _ = d.conn.Exec("ALTER TABLE leads ADD COLUMN ad_creation_time TEXT DEFAULT '';")
+	_, _ = d.conn.Exec("ALTER TABLE leads ADD COLUMN days_running INTEGER DEFAULT 0;")
+	return nil
 }
 
 // Close fecha a conexão com o banco
@@ -117,8 +133,9 @@ func (d *Database) UpsertLead(lead *Lead) (*Lead, error) {
 	INSERT INTO leads (
 		page_id, company_name, active_ads_count, ad_creative_sample, ad_snapshot_url,
 		landing_page_url, extracted_whatsapp, extracted_email, extracted_instagram,
-		ai_quality_score, ai_classification, ai_analysis_reason, ai_icebreaker, status
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'Novo'))
+		ai_quality_score, ai_classification, ai_analysis_reason, ai_icebreaker, business_segment,
+		ad_delivery_start_time, ad_creation_time, days_running, status
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'Novo'))
 	ON CONFLICT(page_id) DO UPDATE SET
 		company_name = excluded.company_name,
 		active_ads_count = excluded.active_ads_count,
@@ -131,7 +148,11 @@ func (d *Database) UpsertLead(lead *Lead) (*Lead, error) {
 		ai_quality_score = excluded.ai_quality_score,
 		ai_classification = excluded.ai_classification,
 		ai_analysis_reason = excluded.ai_analysis_reason,
-		ai_icebreaker = excluded.ai_icebreaker
+		ai_icebreaker = excluded.ai_icebreaker,
+		business_segment = CASE WHEN excluded.business_segment != '' THEN excluded.business_segment ELSE leads.business_segment END,
+		ad_delivery_start_time = CASE WHEN excluded.ad_delivery_start_time != '' THEN excluded.ad_delivery_start_time ELSE leads.ad_delivery_start_time END,
+		ad_creation_time = CASE WHEN excluded.ad_creation_time != '' THEN excluded.ad_creation_time ELSE leads.ad_creation_time END,
+		days_running = CASE WHEN excluded.days_running > 0 THEN excluded.days_running ELSE leads.days_running END
 	RETURNING id, created_at;
 	`
 
@@ -139,7 +160,8 @@ func (d *Database) UpsertLead(lead *Lead) (*Lead, error) {
 		query,
 		lead.PageID, lead.CompanyName, lead.ActiveAdsCount, lead.AdCreativeSample, lead.AdSnapshotURL,
 		lead.LandingPageURL, lead.ExtractedWhatsApp, lead.ExtractedEmail, lead.ExtractedInstagram,
-		lead.AIQualityScore, lead.AIClassification, lead.AIAnalysisReason, lead.AIIcebreaker, lead.Status,
+		lead.AIQualityScore, lead.AIClassification, lead.AIAnalysisReason, lead.AIIcebreaker, lead.BusinessSegment,
+		lead.AdDeliveryStartTime, lead.AdCreationTime, lead.DaysRunning, lead.Status,
 	).Scan(&lead.ID, &lead.CreatedAt)
 
 	if err != nil {
@@ -206,6 +228,8 @@ func (d *Database) GetLeads(f LeadFilter) ([]Lead, int, error) {
 	SELECT id, page_id, company_name, active_ads_count, ad_creative_sample, ad_snapshot_url,
 	       landing_page_url, extracted_whatsapp, extracted_email, extracted_instagram,
 	       ai_quality_score, ai_classification, ai_analysis_reason, ai_icebreaker,
+	       COALESCE(business_segment, ''), COALESCE(ad_delivery_start_time, ''),
+	       COALESCE(ad_creation_time, ''), COALESCE(days_running, 0),
 	       status, created_at
 	FROM leads
 	` + whereSQL + " ORDER BY id DESC"
@@ -232,12 +256,17 @@ func (d *Database) GetLeads(f LeadFilter) ([]Lead, int, error) {
 			&l.ID, &l.PageID, &l.CompanyName, &l.ActiveAdsCount, &l.AdCreativeSample, &l.AdSnapshotURL,
 			&l.LandingPageURL, &l.ExtractedWhatsApp, &l.ExtractedEmail, &l.ExtractedInstagram,
 			&l.AIQualityScore, &l.AIClassification, &l.AIAnalysisReason, &l.AIIcebreaker,
+			&l.BusinessSegment, &l.AdDeliveryStartTime, &l.AdCreationTime, &l.DaysRunning,
 			&l.Status, &l.CreatedAt,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("falha ao ler linha de lead: %w", err)
 		}
 		leads = append(leads, l)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("erro durante iteração de leads: %w", err)
 	}
 
 	if leads == nil {
@@ -253,6 +282,8 @@ func (d *Database) GetLeadByID(id int64) (*Lead, error) {
 	SELECT id, page_id, company_name, active_ads_count, ad_creative_sample, ad_snapshot_url,
 	       landing_page_url, extracted_whatsapp, extracted_email, extracted_instagram,
 	       ai_quality_score, ai_classification, ai_analysis_reason, ai_icebreaker,
+	       COALESCE(business_segment, ''), COALESCE(ad_delivery_start_time, ''),
+	       COALESCE(ad_creation_time, ''), COALESCE(days_running, 0),
 	       status, created_at
 	FROM leads WHERE id = ?
 	`
@@ -261,6 +292,7 @@ func (d *Database) GetLeadByID(id int64) (*Lead, error) {
 		&l.ID, &l.PageID, &l.CompanyName, &l.ActiveAdsCount, &l.AdCreativeSample, &l.AdSnapshotURL,
 		&l.LandingPageURL, &l.ExtractedWhatsApp, &l.ExtractedEmail, &l.ExtractedInstagram,
 		&l.AIQualityScore, &l.AIClassification, &l.AIAnalysisReason, &l.AIIcebreaker,
+		&l.BusinessSegment, &l.AdDeliveryStartTime, &l.AdCreationTime, &l.DaysRunning,
 		&l.Status, &l.CreatedAt,
 	)
 	if err == sql.ErrNoRows {

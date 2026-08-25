@@ -13,28 +13,29 @@ import (
 
 // RawAd representa o formato bruto de um anúncio retornado pela Graph API da Meta
 type RawAd struct {
-	ID                         string    `json:"id"`
-	PageID                     string    `json:"page_id"`
-	PageName                   string    `json:"page_name"`
-	AdCreativeBodies           []string  `json:"ad_creative_bodies"`
-	AdSnapshotURL              string    `json:"ad_snapshot_url"`
-	AdCreativeLinkCaptions     []string  `json:"ad_creative_link_captions"`
-	AdCreativeLinkTitles       []string  `json:"ad_creative_link_titles"`
-	AdCreativeLinkDescriptions []string  `json:"ad_creative_link_descriptions"`
-	PublisherPlatforms         []string  `json:"publisher_platforms"`
-	AdDeliveryStartTime        string    `json:"ad_delivery_start_time"`
+	ID                         string   `json:"id"`
+	PageID                     string   `json:"page_id"`
+	PageName                   string   `json:"page_name"`
+	AdCreativeBodies           []string `json:"ad_creative_bodies"`
+	AdSnapshotURL              string   `json:"ad_snapshot_url"`
+	AdCreativeLinkCaptions     []string `json:"ad_creative_link_captions"`
+	AdCreativeLinkTitles       []string `json:"ad_creative_link_titles"`
+	AdCreativeLinkDescriptions []string `json:"ad_creative_link_descriptions"`
+	PublisherPlatforms         []string `json:"publisher_platforms"`
+	AdDeliveryStartTime        string   `json:"ad_delivery_start_time"`
+	AdCreationTime             string   `json:"ad_creation_time"`
 }
 
 // MetaAPIResponse encapsula a resposta da Graph API
 type MetaAPIResponse struct {
 	Data   []RawAd `json:"data"`
-	Paging struct {
+	Paging *struct {
 		Cursors struct {
 			Before string `json:"before"`
 			After  string `json:"after"`
 		} `json:"cursors"`
 		Next string `json:"next"`
-	} `json:"paging"`
+	} `json:"paging,omitempty"`
 	Error *struct {
 		Message   string `json:"message"`
 		Type      string `json:"type"`
@@ -46,13 +47,16 @@ type MetaAPIResponse struct {
 
 // AggregatedCompany agrupa todos os anúncios ativos sob a mesma página/empresa
 type AggregatedCompany struct {
-	PageID             string   `json:"page_id"`
-	CompanyName        string   `json:"company_name"`
-	ActiveAdsCount     int      `json:"active_ads_count"`
-	AdCreativeSample   string   `json:"ad_creative_sample"`
-	AdSnapshotURL      string   `json:"ad_snapshot_url"`
-	LandingPageURL     string   `json:"landing_page_url"`
-	PublisherPlatforms []string `json:"publisher_platforms"`
+	PageID              string   `json:"page_id"`
+	CompanyName         string   `json:"company_name"`
+	ActiveAdsCount      int      `json:"active_ads_count"`
+	AdCreativeSample    string   `json:"ad_creative_sample"`
+	AdSnapshotURL       string   `json:"ad_snapshot_url"`
+	LandingPageURL      string   `json:"landing_page_url"`
+	PublisherPlatforms  []string `json:"publisher_platforms"`
+	AdDeliveryStartTime string   `json:"ad_delivery_start_time"`
+	AdCreationTime      string   `json:"ad_creation_time"`
+	DaysRunning         int      `json:"days_running"`
 }
 
 // SearchParams define os filtros da busca
@@ -79,35 +83,31 @@ func NewClient(accessToken string) *Client {
 	}
 }
 
-// SearchAds busca anúncios na Meta Ad Library e agrupa por page_id
-func (c *Client) SearchAds(params SearchParams) ([]AggregatedCompany, error) {
+// FetchAdsPage busca uma página individual de anúncios na Meta Ads Library retornando as empresas agregadas e o cursor after
+func (c *Client) FetchAdsPage(params SearchParams, afterCursor string) ([]AggregatedCompany, string, error) {
 	if c.accessToken == "" {
-		return nil, fmt.Errorf("META_ACCESS_TOKEN não está configurado no arquivo .env")
-	}
-
-	limit := params.Limit
-	if limit <= 0 {
-		limit = 25
-	}
-	// A API da Meta permite até 100 por página
-	if limit > 100 {
-		limit = 100
+		return nil, "", fmt.Errorf("token de acesso da Meta não configurado")
 	}
 
 	endpoint := "https://graph.facebook.com/v21.0/ads_archive"
 	reqURL, err := url.Parse(endpoint)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	cleanToken := strings.TrimSpace(c.accessToken)
 	q := reqURL.Query()
 	q.Set("access_token", cleanToken)
+	q.Set("ad_type", "ALL")
+	q.Set("ad_active_status", "ACTIVE")
 	q.Set("search_terms", params.SearchTerms)
 	q.Set("ad_reached_countries", "['BR']")
-	q.Set("ad_active_status", "ACTIVE")
-	q.Set("fields", "id,page_id,page_name,ad_creative_bodies,ad_snapshot_url,ad_creative_link_captions,ad_creative_link_titles,ad_creative_link_descriptions,publisher_platforms,ad_delivery_start_time")
-	q.Set("limit", fmt.Sprintf("%d", limit))
+	q.Set("fields", "id,page_id,page_name,ad_creative_bodies,ad_snapshot_url,ad_creative_link_captions,ad_creative_link_titles,ad_creative_link_descriptions,publisher_platforms,ad_delivery_start_time,ad_creation_time")
+	q.Set("limit", "50")
+
+	if afterCursor != "" {
+		q.Set("after", afterCursor)
+	}
 
 	if params.AdDeliveryDateMin != "" {
 		q.Set("ad_delivery_date_min", params.AdDeliveryDateMin)
@@ -130,32 +130,38 @@ func (c *Client) SearchAds(params SearchParams) ([]AggregatedCompany, error) {
 
 	req, err := http.NewRequest(http.MethodGet, reqURL.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("erro ao criar requisição para Meta API: %w", err)
+		return nil, "", fmt.Errorf("erro ao criar requisição para Meta API: %w", err)
 	}
 	req.Header.Set("User-Agent", "AdLeadFinder/1.0")
 	req.Header.Set("Authorization", "Bearer "+cleanToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("erro ao conectar com a Meta Graph API: %w", err)
+		return nil, "", fmt.Errorf("erro ao conectar com a Meta Graph API: %w", err)
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("erro ao ler resposta da Meta API: %w", err)
+		return nil, "", err
 	}
 
 	var metaResp MetaAPIResponse
 	if err := json.Unmarshal(bodyBytes, &metaResp); err != nil {
-		return nil, fmt.Errorf("erro ao decodificar JSON da Meta API: %w", err)
+		return nil, "", err
 	}
 
 	if metaResp.Error != nil {
-		return nil, fmt.Errorf("erro retornado pela Meta API: %s (código: %d)", metaResp.Error.Message, metaResp.Error.Code)
+		return nil, "", fmt.Errorf("erro retornado pela Meta API: %s (código: %d)", metaResp.Error.Message, metaResp.Error.Code)
 	}
 
-	return c.aggregateAds(metaResp.Data), nil
+	nextCursor := ""
+	if metaResp.Paging != nil && metaResp.Paging.Cursors.After != "" && metaResp.Paging.Next != "" {
+		nextCursor = metaResp.Paging.Cursors.After
+	}
+
+	companies := c.aggregateAds(metaResp.Data)
+	return companies, nextCursor, nil
 }
 
 var urlRegex = regexp.MustCompile(`(?i)\bhttps?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/[^\s]*)?`)
@@ -173,17 +179,31 @@ func (c *Client) aggregateAds(ads []RawAd) []AggregatedCompany {
 		comp, exists := companiesMap[pageID]
 		if !exists {
 			comp = &AggregatedCompany{
-				PageID:             pageID,
-				CompanyName:        strings.TrimSpace(ad.PageName),
-				ActiveAdsCount:     0,
-				AdSnapshotURL:      ad.AdSnapshotURL,
-				PublisherPlatforms: ad.PublisherPlatforms,
+				PageID:              pageID,
+				CompanyName:         strings.TrimSpace(ad.PageName),
+				ActiveAdsCount:      0,
+				AdSnapshotURL:       ad.AdSnapshotURL,
+				PublisherPlatforms:  ad.PublisherPlatforms,
+				AdDeliveryStartTime: strings.TrimSpace(ad.AdDeliveryStartTime),
+				AdCreationTime:      strings.TrimSpace(ad.AdCreationTime),
 			}
 			companiesMap[pageID] = comp
 			order = append(order, pageID)
 		}
 
 		comp.ActiveAdsCount++
+
+		// Preserva a data de início mais antiga entre os anúncios da mesma empresa
+		if ad.AdDeliveryStartTime != "" {
+			if comp.AdDeliveryStartTime == "" || isEarlier(ad.AdDeliveryStartTime, comp.AdDeliveryStartTime) {
+				comp.AdDeliveryStartTime = strings.TrimSpace(ad.AdDeliveryStartTime)
+			}
+		}
+		if ad.AdCreationTime != "" {
+			if comp.AdCreationTime == "" || isEarlier(ad.AdCreationTime, comp.AdCreationTime) {
+				comp.AdCreationTime = strings.TrimSpace(ad.AdCreationTime)
+			}
+		}
 
 		// Amostra de criativo (mantém o maior ou mais detalhado)
 		for _, body := range ad.AdCreativeBodies {
@@ -201,9 +221,64 @@ func (c *Client) aggregateAds(ads []RawAd) []AggregatedCompany {
 
 	var result []AggregatedCompany
 	for _, pageID := range order {
-		result = append(result, *companiesMap[pageID])
+		comp := companiesMap[pageID]
+		comp.DaysRunning = calculateDaysRunning(comp.AdDeliveryStartTime, comp.AdCreationTime)
+		result = append(result, *comp)
 	}
 	return result
+}
+
+func parseMetaDate(dateStr string) (time.Time, error) {
+	dateStr = strings.TrimSpace(dateStr)
+	if dateStr == "" {
+		return time.Time{}, fmt.Errorf("data vazia")
+	}
+
+	formats := []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05-0700",
+		"2006-01-02T15:04:05Z07:00",
+		"2006-01-02T15:04:05",
+		"2006-01-02",
+	}
+
+	for _, layout := range formats {
+		if t, err := time.Parse(layout, dateStr); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("formato de data desconhecido: %s", dateStr)
+}
+
+func isEarlier(dateStrA, dateStrB string) bool {
+	tA, errA := parseMetaDate(dateStrA)
+	tB, errB := parseMetaDate(dateStrB)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return tA.Before(tB)
+}
+
+func calculateDaysRunning(startTimeStr, creationTimeStr string) int {
+	dateStr := strings.TrimSpace(startTimeStr)
+	if dateStr == "" {
+		dateStr = strings.TrimSpace(creationTimeStr)
+	}
+	if dateStr == "" {
+		return 0
+	}
+
+	parsedTime, err := parseMetaDate(dateStr)
+	if err != nil || parsedTime.IsZero() {
+		return 0
+	}
+
+	diff := time.Since(parsedTime)
+	days := int(diff.Hours() / 24)
+	if days < 0 {
+		return 0
+	}
+	return days
 }
 
 func extractLandingPageURL(ad RawAd) string {

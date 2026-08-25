@@ -11,6 +11,14 @@ document.addEventListener('alpine:init', () => {
     onlyWhatsApp: false,
     onlyEmail: false,
     minScore: 0,
+
+    // Personalização de Oferta / Pitch Suffix (persistido no localStorage)
+    customPitch: localStorage.getItem('nexus_custom_pitch') || 'Somos especialistas em estruturar o Diagnóstico Comercial para empresas ajustarem gargalos e ganharem previsibilidade de vendas. Gostaria de entender: como está a taxa de conversão dos leads que chegam dos seus anúncios hoje?',
+    showPitchEditor: false,
+    
+    // Modal de Visualização de Copy
+    copyModalOpen: false,
+    selectedLeadForCopy: null,
     
     // Estado de Execução
     loading: false,
@@ -83,6 +91,35 @@ document.addEventListener('alpine:init', () => {
       }
     },
 
+    saveCustomPitch() {
+      localStorage.setItem('nexus_custom_pitch', this.customPitch);
+      this.showToast('Pitch / Complemento da Oferta salvo com sucesso!', 'success');
+    },
+
+    resetCustomPitch() {
+      this.customPitch = 'Somos especialistas em estruturar o Diagnóstico Comercial para empresas ajustarem gargalos e ganharem previsibilidade de vendas. Gostaria de entender: como está a taxa de conversão dos leads que chegam dos seus anúncios hoje?';
+      localStorage.setItem('nexus_custom_pitch', this.customPitch);
+      this.showToast('Pitch restaurado para a versão padrão', 'info');
+    },
+
+    getFullMessage(lead) {
+      if (!lead) return '';
+      const baseIcebreaker = (lead.ai_icebreaker || `Olá equipe da ${lead.company_name}! Vi os anúncios ativos de vocês no Meta Ads.`).trim();
+      const pitch = (this.customPitch || '').trim();
+      if (!pitch) return baseIcebreaker;
+      return `${baseIcebreaker}\n\n${pitch}`;
+    },
+
+    openCopyModal(lead) {
+      this.selectedLeadForCopy = lead;
+      this.copyModalOpen = true;
+    },
+
+    closeCopyModal() {
+      this.copyModalOpen = false;
+      this.selectedLeadForCopy = null;
+    },
+
     async loadStats() {
       try {
         const res = await fetch('/api/stats');
@@ -119,11 +156,22 @@ document.addEventListener('alpine:init', () => {
           const data = await res.json();
           this.leads = data.leads || [];
           this.totalCount = data.total || 0;
+          this.refreshIcons();
         }
       } catch (err) {
         console.error('Erro ao carregar leads:', err);
         this.showToast('Erro ao listar leads do banco de dados', 'error');
       }
+    },
+
+    refreshIcons() {
+      this.$nextTick(() => {
+        setTimeout(() => {
+          if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons();
+          }
+        }, 50);
+      });
     },
 
     async startSearch() {
@@ -133,14 +181,14 @@ document.addEventListener('alpine:init', () => {
       }
 
       this.loading = true;
-      this.loadingStep = 'Consultando Meta Ad Library API...';
+      this.loadingStep = 'Consultando Meta Ad Library API com paginação inteligente...';
 
       const stepTimer1 = setTimeout(() => {
         if (this.loading) this.loadingStep = 'Raspando Landing Pages concorrentemente (WhatsApp, E-mails)...';
       }, 3000);
 
       const stepTimer2 = setTimeout(() => {
-        if (this.loading) this.loadingStep = 'Qualificando maturidade com Google Gemini AI...';
+        if (this.loading) this.loadingStep = 'Qualificando maturidade & nicho com Google Gemini 3.7 Flash...';
       }, 7000);
 
       try {
@@ -205,20 +253,28 @@ document.addEventListener('alpine:init', () => {
           throw new Error('Falha ao atualizar status');
         }
 
-        const index = this.leads.findIndex(l => l.id === id);
-        if (index !== -1) {
-          this.leads[index].status = newStatus;
+        // Se estiver em uma aba específica (ex: 'Novo'), remove imediatamente da visualização atual
+        if (this.currentTab !== 'Todos' && this.currentTab !== newStatus) {
+          this.leads = this.leads.filter(l => l.id !== id);
+          this.totalCount = Math.max(0, this.totalCount - 1);
+        } else {
+          const index = this.leads.findIndex(l => l.id === id);
+          if (index !== -1) {
+            this.leads[index].status = newStatus;
+          }
         }
 
         this.showToast(`Lead marcado como "${newStatus}"`, 'success');
-        this.loadStats();
+        await this.loadStats();
+        this.refreshIcons();
       } catch (err) {
         this.showToast(err.message, 'error');
       }
     },
 
-    async deleteLead(id) {
-      if (!confirm('Deseja realmente excluir este lead da base de dados?')) {
+    async deleteLead(id, companyName) {
+      const name = companyName || 'este lead';
+      if (!confirm(`Deseja realmente excluir "${name}" da base de dados?`)) {
         return;
       }
 
@@ -232,8 +288,13 @@ document.addEventListener('alpine:init', () => {
         }
 
         this.leads = this.leads.filter(l => l.id !== id);
-        this.showToast('Lead excluído com sucesso', 'info');
-        this.loadStats();
+        this.totalCount = Math.max(0, this.totalCount - 1);
+        if (this.selectedLeadForCopy && this.selectedLeadForCopy.id === id) {
+          this.closeCopyModal();
+        }
+        this.showToast(`Lead "${name}" excluído com sucesso!`, 'info');
+        await this.loadStats();
+        this.refreshIcons();
       } catch (err) {
         this.showToast(err.message, 'error');
       }
@@ -244,35 +305,93 @@ document.addEventListener('alpine:init', () => {
         this.showToast('Nada para copiar.', 'info');
         return;
       }
-      navigator.clipboard.writeText(text).then(() => {
-        this.showToast(successMsg, 'success');
-      }).catch(() => {
-        this.showToast('Erro ao copiar para a área de transferência', 'error');
-      });
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(() => {
+          this.showToast(successMsg, 'success');
+        }).catch(() => {
+          this.fallbackCopyText(text, successMsg);
+        });
+      } else {
+        this.fallbackCopyText(text, successMsg);
+      }
     },
 
-    openWhatsApp(phone, companyName, icebreaker) {
-      if (!phone) {
+    fallbackCopyText(text, successMsg) {
+      try {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        const successful = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        if (successful) {
+          this.showToast(successMsg, 'success');
+        } else {
+          this.showToast('Erro ao copiar texto automaticamente.', 'error');
+        }
+      } catch (err) {
+        this.showToast('Erro ao copiar: ' + err.message, 'error');
+      }
+    },
+
+    getWhatsAppLink(lead) {
+      if (!lead || !lead.extracted_whatsapp) return '';
+      let cleanPhone = lead.extracted_whatsapp.replace(/\D/g, '');
+      if (!cleanPhone.startsWith('55') && (cleanPhone.length === 10 || cleanPhone.length === 11)) {
+        cleanPhone = '55' + cleanPhone;
+      }
+      const fullMsg = this.getFullMessage(lead);
+      return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(fullMsg)}`;
+    },
+
+    copyWhatsAppLink(lead) {
+      const link = this.getWhatsAppLink(lead);
+      if (!link) {
         this.showToast('WhatsApp não disponível para este lead.', 'error');
         return;
       }
-      const cleanPhone = phone.replace(/\D/g, '');
-      const defaultMsg = icebreaker ? encodeURIComponent(icebreaker) : encodeURIComponent(`Olá, equipe da ${companyName}!`);
-      const url = `https://wa.me/${cleanPhone}?text=${defaultMsg}`;
+      this.copyText(link, 'Link do WhatsApp copiado com sucesso!');
+    },
+
+    openWhatsApp(lead) {
+      const url = this.getWhatsAppLink(lead);
+      if (!url) {
+        this.showToast('WhatsApp não disponível para este lead.', 'error');
+        return;
+      }
       window.open(url, '_blank');
     },
 
-    openEmail(email, companyName, icebreaker) {
-      if (!email) {
+    openEmail(lead) {
+      if (!lead || !lead.extracted_email) {
         this.showToast('E-mail não disponível para este lead.', 'error');
         return;
       }
-      const subject = encodeURIComponent(`Parceria e Oportunidades - ${companyName}`);
-      const body = encodeURIComponent(icebreaker || `Olá equipe da ${companyName},\n\n`);
-      const mailtoURL = `mailto:${email}?subject=${subject}&body=${body}`;
+      const subject = encodeURIComponent(`Oportunidade & Parceria - ${lead.company_name}`);
+      const body = encodeURIComponent(this.getFullMessage(lead));
+      const mailtoURL = `mailto:${lead.extracted_email}?subject=${subject}&body=${body}`;
       
       window.location.href = mailtoURL;
-      this.showToast(`Abrindo cliente de e-mail para ${email}...`, 'info');
+      this.showToast(`Abrindo cliente de e-mail para ${lead.extracted_email}...`, 'info');
+    },
+
+    openWebsite(lead) {
+      if (!lead) return;
+      let url = (lead.landing_page_url || '').trim();
+      if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+        window.open(url, '_blank');
+        return;
+      }
+      if (url && url.includes('.')) {
+        window.open(`https://${url}`, '_blank');
+        return;
+      }
+      // Fallback: Busca da empresa no Google
+      window.open(`https://www.google.com/search?q=${encodeURIComponent(lead.company_name)}`, '_blank');
     },
 
     exportCSV() {
@@ -311,6 +430,23 @@ document.addEventListener('alpine:init', () => {
         return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
       }
       return phone;
+    },
+
+    formatDaysRunning(days) {
+      if (typeof days !== 'number' || days <= 0) return 'Ativo hoje';
+      if (days === 1) return '1 dia ativo';
+      return `${days} dias ativo`;
+    },
+
+    formatAdStartDate(dateStr) {
+      if (!dateStr) return '';
+      try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return dateStr;
+        return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+      } catch {
+        return dateStr;
+      }
     }
   }));
 });

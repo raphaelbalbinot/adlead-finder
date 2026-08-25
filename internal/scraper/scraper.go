@@ -40,10 +40,10 @@ func NewScraper() *Scraper {
 
 var (
 	// Regex para WhatsApp nos links
-	waLinkRegex = regexp.MustCompile(`(?i)(?:wa\.me|api\.whatsapp\.com/send\?phone=)(\d{10,15})`)
+	waLinkRegex = regexp.MustCompile(`(?i)(?:wa\.me\/|api\.whatsapp\.com\/send\?phone=)(\+?\d{10,15})`)
 	
-	// Regex para telefones do Brasil no texto HTML
-	phoneBRRegex = regexp.MustCompile(`(?:\+?55\s?)?(?:\(?([1-9]{2})\)?\s?)(?:(9\d{4})[-\s]?(\d{4})|(\d{4})[-\s]?(\d{4}))`)
+	// Regex estrito para celulares do Brasil no texto HTML (DDD + 9XXXX-XXXX)
+	phoneBRRegex = regexp.MustCompile(`(?:\+?55\s?)?(?:\(?([1-9]{2})\)?\s?)(?:9\s?\d{4}[-\s]?\d{4})`)
 	
 	// Regex para emails
 	emailRegex = regexp.MustCompile(`(?i)\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b`)
@@ -87,36 +87,39 @@ func (s *Scraper) ScrapeLandingPage(rawURL string) ExtractedContacts {
 		return contacts
 	}
 
-	// 1. Varrer links (href)
-	doc.Find("a").Each(func(i int, sel *goquery.Selection) {
-		href, exists := sel.Attr("href")
-		if !exists {
-			return
-		}
-		href = strings.TrimSpace(href)
+	// 1. Varrer links (href, onclick, data-whatsapp, data-href)
+	doc.Find("a, button, [onclick], [data-whatsapp], [data-href]").Each(func(i int, sel *goquery.Selection) {
+		href, _ := sel.Attr("href")
+		onclick, _ := sel.Attr("onclick")
+		dataWA, _ := sel.Attr("data-whatsapp")
+		dataHref, _ := sel.Attr("data-href")
 
-		// WhatsApp em link
+		combined := strings.Join([]string{href, onclick, dataWA, dataHref}, " ")
+
+		// WhatsApp em link ou atributo
 		if contacts.WhatsApp == "" {
-			if match := waLinkRegex.FindStringSubmatch(href); len(match) > 1 {
-				contacts.WhatsApp = cleanPhone(match[1])
-			} else if strings.Contains(href, "whatsapp.com") || strings.Contains(href, "wa.me") {
-				contacts.WhatsApp = extractPhoneFromAnyWA(href)
+			if strings.Contains(combined, "whatsapp.com") || strings.Contains(combined, "wa.me") || strings.Contains(combined, "wa.link") || strings.Contains(combined, "tel:") {
+				contacts.WhatsApp = extractPhoneFromAnyWA(combined)
 			}
 		}
 
 		// Email em mailto:
-		if contacts.Email == "" && strings.HasPrefix(strings.ToLower(href), "mailto:") {
-			email := strings.TrimPrefix(href, "mailto:")
-			email = strings.Split(email, "?")[0]
-			email = strings.TrimSpace(email)
-			if isValidEmail(email) {
-				contacts.Email = strings.ToLower(email)
+		if contacts.Email == "" && strings.Contains(strings.ToLower(combined), "mailto:") {
+			parts := strings.Split(combined, "mailto:")
+			if len(parts) > 1 {
+				email := strings.Split(parts[1], "?")[0]
+				email = strings.Split(email, "\"")[0]
+				email = strings.Split(email, "'")[0]
+				email = strings.TrimSpace(email)
+				if isValidEmail(email) {
+					contacts.Email = strings.ToLower(email)
+				}
 			}
 		}
 
 		// Instagram em link
-		if contacts.Instagram == "" && strings.Contains(href, "instagram.com") {
-			if match := instaRegex.FindStringSubmatch(href); len(match) > 1 {
+		if contacts.Instagram == "" && strings.Contains(combined, "instagram.com") {
+			if match := instaRegex.FindStringSubmatch(combined); len(match) > 1 {
 				user := match[1]
 				if user != "p" && user != "explore" && user != "reels" && user != "stories" && user != "direct" {
 					contacts.Instagram = "https://instagram.com/" + user
@@ -125,15 +128,22 @@ func (s *Scraper) ScrapeLandingPage(rawURL string) ExtractedContacts {
 		}
 	})
 
-	// 2. Se WhatsApp ainda vazio, busca no texto do corpo
+	// 2. Remove tags não-visíveis (scripts, estilos, SVG, iframes) antes de ler o texto
+	doc.Find("script, style, noscript, svg, iframe, link, meta").Remove()
 	htmlText := doc.Text()
+
+	// 3. Se WhatsApp ainda vazio, busca por padrão estrito de celular no texto
 	if contacts.WhatsApp == "" {
-		if match := phoneBRRegex.FindString(htmlText); match != "" {
-			contacts.WhatsApp = formatBRPhone(match)
+		allPhoneMatches := phoneBRRegex.FindAllString(htmlText, -1)
+		for _, m := range allPhoneMatches {
+			if valid := cleanAndValidateBRPhone(m); valid != "" {
+				contacts.WhatsApp = valid
+				break
+			}
 		}
 	}
 
-	// 3. Se Email ainda vazio, busca por regex no texto
+	// 4. Se Email ainda vazio, busca por regex no texto limpo
 	if contacts.Email == "" {
 		allEmails := emailRegex.FindAllString(htmlText, -1)
 		for _, e := range allEmails {
@@ -200,41 +210,102 @@ func (s *Scraper) ScrapeBatch(urls []string) []ExtractedContacts {
 	return results
 }
 
-func cleanPhone(raw string) string {
+var validDDDs = map[string]bool{
+	"11": true, "12": true, "13": true, "14": true, "15": true, "16": true, "17": true, "18": true, "19": true,
+	"21": true, "22": true, "24": true, "27": true, "28": true,
+	"31": true, "32": true, "33": true, "34": true, "35": true, "37": true, "38": true,
+	"41": true, "42": true, "43": true, "44": true, "45": true, "46": true, "47": true, "48": true, "49": true,
+	"51": true, "53": true, "54": true, "55": true,
+	"61": true, "62": true, "63": true, "64": true, "65": true, "66": true, "67": true, "68": true, "69": true,
+	"71": true, "73": true, "74": true, "75": true, "77": true, "79": true,
+	"81": true, "82": true, "83": true, "84": true, "85": true, "86": true, "87": true, "88": true, "89": true,
+	"91": true, "92": true, "93": true, "94": true, "95": true, "96": true, "97": true, "98": true, "99": true,
+}
+
+// cleanAndValidateBRPhone valida e normaliza número brasileiro de WhatsApp para formato 55 + DDD + 9 + 8 dígitos
+func cleanAndValidateBRPhone(raw string) string {
 	digits := regexp.MustCompile(`\D`).ReplaceAllString(raw, "")
-	if strings.HasPrefix(digits, "55") && len(digits) >= 12 {
-		return digits
+	
+	// Remove leading zero se houver (ex: 011999999999 -> 11999999999)
+	for strings.HasPrefix(digits, "0") {
+		digits = digits[1:]
 	}
-	if len(digits) >= 10 && len(digits) <= 11 {
-		return "55" + digits
+
+	// Remove 55 se presente no início para validar o DDD nacional
+	national := digits
+	if strings.HasPrefix(national, "55") && len(national) >= 12 {
+		national = national[2:]
 	}
-	return digits
+
+	// Valida comprimento: deve ter 10 (DDD + 8 dígitos) ou 11 (DDD + 9 dígitos)
+	if len(national) != 10 && len(national) != 11 {
+		return ""
+	}
+
+	ddd := national[:2]
+	if !validDDDs[ddd] {
+		return ""
+	}
+
+	number := national[2:]
+
+	// Descartar números corporativos 0800, 4004, etc.
+	if strings.HasPrefix(number, "0800") || strings.HasPrefix(number, "4004") || strings.HasPrefix(number, "3003") {
+		return ""
+	}
+
+	// Descartar sequências repetidas ou placeholders (ex: 999999999, 123456789)
+	if isDummyPhoneNumber(number) {
+		return ""
+	}
+
+	// Se tem 11 dígitos: o nono dígito DEVE ser 9
+	if len(national) == 11 {
+		if !strings.HasPrefix(number, "9") {
+			return "" // 11 dígitos que não começam com 9 no Brasil é inválido
+		}
+		return "55" + national
+	}
+
+	// Se tem 10 dígitos (DDD + 8 dígitos):
+	// Se começa com [6-9], era celular no formato antigo -> adiciona o nono dígito 9 obrigatório
+	if number[0] >= '6' && number[0] <= '9' {
+		return "55" + ddd + "9" + number
+	}
+
+	// Se começa com [2-5], é telefone fixo (descartar para WhatsApp)
+	return ""
 }
 
 func extractPhoneFromAnyWA(link string) string {
+	link = strings.TrimSpace(link)
+	if strings.Contains(link, "chat.whatsapp.com") || strings.Contains(link, "/message/") {
+		return "" // Ignora links de grupos ou hashes de catálogo
+	}
+
 	u, err := url.Parse(link)
 	if err == nil {
 		phone := u.Query().Get("phone")
 		if phone != "" {
-			return cleanPhone(phone)
+			if valid := cleanAndValidateBRPhone(phone); valid != "" {
+				return valid
+			}
 		}
 	}
-	digits := regexp.MustCompile(`\d{10,14}`).FindString(link)
-	if digits != "" {
-		return cleanPhone(digits)
+
+	// Regex específico para wa.me/5511... ou api.whatsapp.com/send?phone=...
+	match := regexp.MustCompile(`(?:wa\.me\/|send\?phone=|\/p\/)(\+?\d{10,15})`).FindStringSubmatch(link)
+	if len(match) > 1 {
+		if valid := cleanAndValidateBRPhone(match[1]); valid != "" {
+			return valid
+		}
 	}
+
 	return ""
 }
 
 func formatBRPhone(raw string) string {
-	digits := regexp.MustCompile(`\D`).ReplaceAllString(raw, "")
-	if len(digits) >= 10 {
-		if strings.HasPrefix(digits, "55") {
-			return digits
-		}
-		return "55" + digits
-	}
-	return ""
+	return cleanAndValidateBRPhone(raw)
 }
 
 func isValidEmail(email string) bool {
@@ -257,4 +328,24 @@ func isValidEmail(email string) bool {
 		}
 	}
 	return true
+}
+
+func isDummyPhoneNumber(num string) bool {
+	if len(num) < 8 {
+		return true
+	}
+	allSame := true
+	for i := 1; i < len(num); i++ {
+		if num[i] != num[0] {
+			allSame = false
+			break
+		}
+	}
+	if allSame {
+		return true
+	}
+	if num == "999999999" || num == "123456789" || num == "987654321" || num == "900000000" || num == "988888888" {
+		return true
+	}
+	return false
 }

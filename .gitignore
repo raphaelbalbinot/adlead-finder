@@ -34,3 +34,7 @@ go.work
 *.db-journal
 *.db-wal
 
+# Task management & planning
+tasks/
+
+

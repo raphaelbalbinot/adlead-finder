@@ -18,6 +18,7 @@ import (
 	"github.com/raphaelbalbinot/adlead-finder/internal/ai"
 	"github.com/raphaelbalbinot/adlead-finder/internal/db"
 	"github.com/raphaelbalbinot/adlead-finder/internal/meta"
+	"github.com/raphaelbalbinot/adlead-finder/internal/scraper"
 	"github.com/raphaelbalbinot/adlead-finder/web"
 )
 
@@ -27,12 +28,6 @@ type Server struct {
 	metaClient *meta.Client
 	aiClient   *ai.Client
 	router     *chi.Mux
-}
-
-type scraperResult struct {
-	WhatsApp  string
-	Email     string
-	Instagram string
 }
 
 // SearchRequest representa os parâmetros enviados pelo frontend para iniciar uma busca
@@ -122,113 +117,153 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Busca anúncios na Meta Ad Library
+	target := req.Limit
+	if target <= 0 {
+		target = 25
+	}
+	if target > 100 {
+		target = 100
+	}
+
 	metaParams := meta.SearchParams{
 		SearchTerms:        req.SearchTerms,
-		Limit:              req.Limit,
+		Limit:              target,
 		AdDeliveryDateMin:  req.AdDeliveryDateMin,
 		PublisherPlatforms: req.PublisherPlatforms,
 	}
 
-	companies, err := s.metaClient.SearchAds(metaParams)
-	if err != nil {
-		log.Printf("Erro na busca da Meta API: %v", err)
-		s.sendJSONError(w, fmt.Sprintf("Erro ao consultar a Meta Ad Library: %v", err), http.StatusBadGateway)
-		return
-	}
-
-	if len(companies) == 0 {
-		s.sendJSON(w, map[string]interface{}{
-			"message": "Nenhum anúncio encontrado para os termos informados.",
-			"total":   0,
-			"leads":   []db.Lead{},
-		}, http.StatusOK)
-		return
-	}
-
-	// 2. Coleta URLs e dispara raspagem concorrente de Landing Pages
-	urls := make([]string, len(companies))
-	for i, c := range companies {
-		urls[i] = c.LandingPageURL
-	}
-
-	// Scraping concorrente com timeout isolado
-	scraperObj := newScraperHelper()
-	contactsList := scraperObj.ScrapeBatch(urls)
-
-	// 3. Qualificação via Gemini AI concorrente e persistência no SQLite
 	ctx := r.Context()
+	scraperObj := scraper.NewScraper()
+
+	seenPageIDs := make(map[string]bool)
 	var processedLeads []db.Lead
 	var mu sync.Mutex
-	var wg sync.WaitGroup
 
-	for i, comp := range companies {
-		wg.Add(1)
-		go func(idx int, c meta.AggregatedCompany) {
-			defer wg.Done()
+	afterCursor := ""
+	maxPages := 10 // Itera até 10 páginas para acumular a meta exata com os filtros ativos
 
-			contacts := contactsList[idx]
+	for page := 1; page <= maxPages && len(processedLeads) < target; page++ {
+		// 1. Busca lote de anúncios da Meta
+		companiesBatch, nextCursor, err := s.metaClient.FetchAdsPage(metaParams, afterCursor)
+		if err != nil {
+			if len(processedLeads) > 0 {
+				break // Se já coletou parte dos leads, retorna o que tem
+			}
+			log.Printf("Erro na busca da Meta API: %v", err)
+			s.sendJSONError(w, fmt.Sprintf("Erro ao consultar a Meta Ad Library: %v", err), http.StatusBadGateway)
+			return
+		}
 
-			leadInput := ai.LeadInputData{
-				CompanyName:        c.CompanyName,
-				ActiveAdsCount:     c.ActiveAdsCount,
-				AdCreativeSample:   c.AdCreativeSample,
-				LandingPageURL:     c.LandingPageURL,
-				ExtractedWhatsApp:  contacts.WhatsApp,
-				ExtractedEmail:     contacts.Email,
-				ExtractedInstagram: contacts.Instagram,
+		// Filtra empresas já vistas neste ciclo
+		var uniqueCompanies []meta.AggregatedCompany
+		for _, comp := range companiesBatch {
+			if !seenPageIDs[comp.PageID] {
+				seenPageIDs[comp.PageID] = true
+				uniqueCompanies = append(uniqueCompanies, comp)
+			}
+		}
+
+		if len(uniqueCompanies) == 0 && nextCursor == "" {
+			break
+		}
+
+		if len(uniqueCompanies) > 0 {
+			// 2. Raspagem concorrente de Landing Pages deste lote
+			urls := make([]string, len(uniqueCompanies))
+			for i, c := range uniqueCompanies {
+				urls[i] = c.LandingPageURL
+			}
+			contactsList := scraperObj.ScrapeBatch(urls)
+
+			// 3. Filtra apenas os que atendem aos requisitos de contato
+			var candidateBatch []meta.AggregatedCompany
+			var candidateContacts []scraper.ExtractedContacts
+
+			for i, comp := range uniqueCompanies {
+				contacts := contactsList[i]
+
+				if req.OnlyWhatsApp && contacts.WhatsApp == "" {
+					continue
+				}
+				if req.OnlyEmail && contacts.Email == "" {
+					continue
+				}
+
+				candidateBatch = append(candidateBatch, comp)
+				candidateContacts = append(candidateContacts, contacts)
 			}
 
-			// Qualificação com IA
-			aiResult := s.aiClient.QualifyLead(ctx, leadInput)
+			// 4. Qualifica com Gemini AI e persiste no SQLite
+			if len(candidateBatch) > 0 {
+				var wg sync.WaitGroup
+				for i, comp := range candidateBatch {
+					wg.Add(1)
+					go func(idx int, c meta.AggregatedCompany) {
+						defer wg.Done()
 
-			analysisFull := aiResult.AnalysisReason
-			if aiResult.ClassificationReason != "" {
-				analysisFull = fmt.Sprintf("[%s] %s | %s", aiResult.Classification, aiResult.ClassificationReason, aiResult.AnalysisReason)
-			}
+						contacts := candidateContacts[idx]
 
-			leadEntity := &db.Lead{
-				PageID:             c.PageID,
-				CompanyName:        c.CompanyName,
-				ActiveAdsCount:     c.ActiveAdsCount,
-				AdCreativeSample:   c.AdCreativeSample,
-				AdSnapshotURL:      c.AdSnapshotURL,
-				LandingPageURL:     c.LandingPageURL,
-				ExtractedWhatsApp:  contacts.WhatsApp,
-				ExtractedEmail:     contacts.Email,
-				ExtractedInstagram: contacts.Instagram,
-				AIQualityScore:     aiResult.QualityScore,
-				AIClassification:   aiResult.Classification,
-				AIAnalysisReason:   analysisFull,
-				AIIcebreaker:       aiResult.IcebreakerParagraph,
-				Status:             "Novo",
-			}
+						leadInput := ai.LeadInputData{
+							CompanyName:        c.CompanyName,
+							ActiveAdsCount:     c.ActiveAdsCount,
+							AdCreativeSample:   c.AdCreativeSample,
+							LandingPageURL:     c.LandingPageURL,
+							ExtractedWhatsApp:  contacts.WhatsApp,
+							ExtractedEmail:     contacts.Email,
+							ExtractedInstagram: contacts.Instagram,
+						}
 
-			mu.Lock()
-			savedLead, err := s.db.UpsertLead(leadEntity)
-			mu.Unlock()
+						aiResult := s.aiClient.QualifyLead(ctx, leadInput)
 
-			if err != nil || savedLead == nil {
-				return
-			}
+						if req.MinScore > 0 && aiResult.QualityScore < req.MinScore {
+							return
+						}
 
-			// Aplica filtros em memória se solicitados
-			if req.OnlyWhatsApp && savedLead.ExtractedWhatsApp == "" {
-				return
-			}
-			if req.OnlyEmail && savedLead.ExtractedEmail == "" {
-				return
-			}
-			if req.MinScore > 0 && savedLead.AIQualityScore < req.MinScore {
-				return
-			}
+						analysisFull := aiResult.AnalysisReason
+						if aiResult.ClassificationReason != "" {
+							analysisFull = fmt.Sprintf("[%s] %s | %s", aiResult.Classification, aiResult.ClassificationReason, aiResult.AnalysisReason)
+						}
 
-			mu.Lock()
-			processedLeads = append(processedLeads, *savedLead)
-			mu.Unlock()
-		}(i, comp)
+						leadEntity := &db.Lead{
+							PageID:              c.PageID,
+							CompanyName:         c.CompanyName,
+							ActiveAdsCount:      c.ActiveAdsCount,
+							AdCreativeSample:    c.AdCreativeSample,
+							AdSnapshotURL:       c.AdSnapshotURL,
+							LandingPageURL:      c.LandingPageURL,
+							ExtractedWhatsApp:   contacts.WhatsApp,
+							ExtractedEmail:      contacts.Email,
+							ExtractedInstagram:  contacts.Instagram,
+							AIQualityScore:      aiResult.QualityScore,
+							AIClassification:    aiResult.Classification,
+							AIAnalysisReason:    analysisFull,
+							AIIcebreaker:        aiResult.IcebreakerParagraph,
+							BusinessSegment:     aiResult.BusinessSegment,
+							AdDeliveryStartTime: c.AdDeliveryStartTime,
+							AdCreationTime:      c.AdCreationTime,
+							DaysRunning:         c.DaysRunning,
+							Status:              "Novo",
+						}
+
+						mu.Lock()
+						if len(processedLeads) < target {
+							savedLead, err := s.db.UpsertLead(leadEntity)
+							if err == nil && savedLead != nil {
+								processedLeads = append(processedLeads, *savedLead)
+							}
+						}
+						mu.Unlock()
+					}(i, comp)
+				}
+				wg.Wait()
+			}
+		}
+
+		if len(processedLeads) >= target || nextCursor == "" {
+			break
+		}
+		afterCursor = nextCursor
 	}
-	wg.Wait()
 
 	if processedLeads == nil {
 		processedLeads = []db.Lead{}
@@ -353,15 +388,22 @@ func (s *Server) handleExportCSV(w http.ResponseWriter, r *http.Request) {
 	defer writer.Flush()
 
 	header := []string{
-		"ID", "Empresa", "Anúncios Ativos", "WhatsApp", "E-mail", "Instagram",
+		"ID", "Empresa", "Área de Atuação", "Dias Rodando", "Início de Veiculação", "Anúncios Ativos", "WhatsApp", "E-mail", "Instagram",
 		"Landing Page", "Score IA", "Classificação", "Status", "Abordagem Sugerida", "Criativo", "Data de Cadastro",
 	}
 	_ = writer.Write(header)
 
 	for _, l := range leads {
+		daysStr := "0 dias"
+		if l.DaysRunning > 0 {
+			daysStr = fmt.Sprintf("%d dia(s)", l.DaysRunning)
+		}
 		row := []string{
 			fmt.Sprintf("%d", l.ID),
 			l.CompanyName,
+			l.BusinessSegment,
+			daysStr,
+			l.AdDeliveryStartTime,
 			fmt.Sprintf("%d", l.ActiveAdsCount),
 			l.ExtractedWhatsApp,
 			l.ExtractedEmail,
@@ -388,26 +430,5 @@ func (s *Server) sendJSONError(w http.ResponseWriter, msg string, statusCode int
 	s.sendJSON(w, map[string]interface{}{
 		"error":   true,
 		"message": msg,
-	}, statusCode)
-}
-
-// scraperHelper conecta a camada de scraping ao handler
-type scraperHelper struct{}
-
-func newScraperHelper() *scraperHelper {
-	return &scraperHelper{}
-}
-
-func (sh *scraperHelper) ScrapeBatch(urls []string) []scraperResult {
-	// Import dinâmico da lógica do pacote scraper
-	fromInternal := runScraperBatchInternal(urls)
-	results := make([]scraperResult, len(fromInternal))
-	for i, item := range fromInternal {
-		results[i] = scraperResult{
-			WhatsApp:  item.WhatsApp,
-			Email:     item.Email,
-			Instagram: item.Instagram,
-		}
-	}
-	return results
+		}, statusCode)
 }
