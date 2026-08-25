@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -172,67 +173,79 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	scraperObj := newScraperHelper()
 	contactsList := scraperObj.ScrapeBatch(urls)
 
-	// 3. Qualificação via Gemini AI e persistência no SQLite
+	// 3. Qualificação via Gemini AI concorrente e persistência no SQLite
 	ctx := r.Context()
 	var processedLeads []db.Lead
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 
 	for i, comp := range companies {
-		contacts := contactsList[i]
+		wg.Add(1)
+		go func(idx int, c meta.AggregatedCompany) {
+			defer wg.Done()
 
-		leadInput := ai.LeadInputData{
-			CompanyName:        comp.CompanyName,
-			ActiveAdsCount:     comp.ActiveAdsCount,
-			AdCreativeSample:   comp.AdCreativeSample,
-			LandingPageURL:     comp.LandingPageURL,
-			ExtractedWhatsApp:  contacts.WhatsApp,
-			ExtractedEmail:     contacts.Email,
-			ExtractedInstagram: contacts.Instagram,
-		}
+			contacts := contactsList[idx]
 
-		// Qualificação com IA
-		aiResult := s.aiClient.QualifyLead(ctx, leadInput)
+			leadInput := ai.LeadInputData{
+				CompanyName:        c.CompanyName,
+				ActiveAdsCount:     c.ActiveAdsCount,
+				AdCreativeSample:   c.AdCreativeSample,
+				LandingPageURL:     c.LandingPageURL,
+				ExtractedWhatsApp:  contacts.WhatsApp,
+				ExtractedEmail:     contacts.Email,
+				ExtractedInstagram: contacts.Instagram,
+			}
 
-		analysisFull := aiResult.AnalysisReason
-		if aiResult.ClassificationReason != "" {
-			analysisFull = fmt.Sprintf("[%s] %s | %s", aiResult.Classification, aiResult.ClassificationReason, aiResult.AnalysisReason)
-		}
+			// Qualificação com IA
+			aiResult := s.aiClient.QualifyLead(ctx, leadInput)
 
-		leadEntity := &db.Lead{
-			PageID:             comp.PageID,
-			CompanyName:        comp.CompanyName,
-			ActiveAdsCount:     comp.ActiveAdsCount,
-			AdCreativeSample:   comp.AdCreativeSample,
-			AdSnapshotURL:      comp.AdSnapshotURL,
-			LandingPageURL:     comp.LandingPageURL,
-			ExtractedWhatsApp:  contacts.WhatsApp,
-			ExtractedEmail:     contacts.Email,
-			ExtractedInstagram: contacts.Instagram,
-			AIQualityScore:     aiResult.QualityScore,
-			AIClassification:   aiResult.Classification,
-			AIAnalysisReason:   analysisFull,
-			AIIcebreaker:       aiResult.IcebreakerParagraph,
-			Status:             "Novo",
-		}
+			analysisFull := aiResult.AnalysisReason
+			if aiResult.ClassificationReason != "" {
+				analysisFull = fmt.Sprintf("[%s] %s | %s", aiResult.Classification, aiResult.ClassificationReason, aiResult.AnalysisReason)
+			}
 
-		savedLead, err := s.db.UpsertLead(leadEntity)
-		if err != nil {
-			log.Printf("Aviso: falha ao persistir lead %s: %v", comp.CompanyName, err)
-			continue
-		}
+			leadEntity := &db.Lead{
+				PageID:             c.PageID,
+				CompanyName:        c.CompanyName,
+				ActiveAdsCount:     c.ActiveAdsCount,
+				AdCreativeSample:   c.AdCreativeSample,
+				AdSnapshotURL:      c.AdSnapshotURL,
+				LandingPageURL:     c.LandingPageURL,
+				ExtractedWhatsApp:  contacts.WhatsApp,
+				ExtractedEmail:     contacts.Email,
+				ExtractedInstagram: contacts.Instagram,
+				AIQualityScore:     aiResult.QualityScore,
+				AIClassification:   aiResult.Classification,
+				AIAnalysisReason:   analysisFull,
+				AIIcebreaker:       aiResult.IcebreakerParagraph,
+				Status:             "Novo",
+			}
 
-		// Aplica filtros em memória se solicitados
-		if req.OnlyWhatsApp && savedLead.ExtractedWhatsApp == "" {
-			continue
-		}
-		if req.OnlyEmail && savedLead.ExtractedEmail == "" {
-			continue
-		}
-		if req.MinScore > 0 && savedLead.AIQualityScore < req.MinScore {
-			continue
-		}
+			mu.Lock()
+			savedLead, err := s.db.UpsertLead(leadEntity)
+			mu.Unlock()
 
-		processedLeads = append(processedLeads, *savedLead)
+			if err != nil || savedLead == nil {
+				return
+			}
+
+			// Aplica filtros em memória se solicitados
+			if req.OnlyWhatsApp && savedLead.ExtractedWhatsApp == "" {
+				return
+			}
+			if req.OnlyEmail && savedLead.ExtractedEmail == "" {
+				return
+			}
+			if req.MinScore > 0 && savedLead.AIQualityScore < req.MinScore {
+				return
+			}
+
+			mu.Lock()
+			processedLeads = append(processedLeads, *savedLead)
+			mu.Unlock()
+		}(i, comp)
 	}
+	wg.Wait()
 
 	if processedLeads == nil {
 		processedLeads = []db.Lead{}
